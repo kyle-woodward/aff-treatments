@@ -85,7 +85,25 @@ def main():
         help="path to config file",
     )
 
+    parser.add_argument(
+        "-d",
+        "--dist_img_path",
+        type=str,
+        help="asset path of input DIST img"
+
+    )
+    
+    parser.add_argument(
+        "-o",
+        "--out_folder_path",
+        type=str,
+        help="asset path of output folder"
+
+    )
     args = parser.parse_args()
+
+    dist_img_path = args.dist_img_path
+    out_folder_path = args.out_folder_path
 
     # parse config file
     with open(args.config) as file:
@@ -118,14 +136,15 @@ def main():
     # we need the version 200 / year 2016 data
     # sometimes the date metadata is not actually 2016 so we filter by version as select first image in time
     # Canopy cover image
-    cc_img = ee.Image(
-        cc_ic.filter(ee.Filter.eq("version", 200)).limit(1, "system:time_start").first()
-    )
-
+    # cc_img = ee.Image(
+    #     cc_ic.filter(ee.Filter.eq("version", 200)).limit(1, "system:time_start").first()
+    # )
+    cc_img = ee.Image("projects/pyregence-ee/assets/conus/fuels/Fuels_CC_2021_12") # using FFv1 as baseline
     # Canopy height image
-    ch_img = ee.Image(
-        ch_ic.filter(ee.Filter.eq("version", 200)).limit(1, "system:time_start").first()
-    )
+    # ch_img = ee.Image(
+    #     ch_ic.filter(ee.Filter.eq("version", 200)).limit(1, "system:time_start").first()
+    # )
+    ch_img = ee.Image("projects/pyregence-ee/assets/conus/fuels/Fuels_CH_2021_12") # using FFv1 as baseline
     # Canopy base height image
     cbh_img = ee.Image(
         cbh_ic.filter(ee.Filter.eq("version", 200))
@@ -157,14 +176,17 @@ def main():
     # this will update with new disturbance info
     # can update with version tags of code
     dist_img = ee.Image(
-        f"projects/pyregence-ee/assets/workflow_assets/dist_all_{version}"
+        f"{dist_img_path}"
     )
 
     # get binary image of where disturbance happened
-    dist_mask = dist_img.mask()
+    dist_mask = dist_img.mask() # this creates 1's everywhere include outside disturbed areas. not using
 
     #canopy guide collection for post-processing ruleset
-    canopy_guide = ee.ImageCollection(f"projects/pyregence-ee/assets/conus/fuels/canopy_guide_{version}").select('newCanopy').mosaic()
+    # create cg collection path from the dist_img_path
+    cg_path = dist_img_path.replace('treatment_scenarios','fuelscapes_scenarios') + '/canopy_guide_collection'
+    logger.info('CG path:',cg_path)
+    canopy_guide = ee.ImageCollection(f"{cg_path}").select('newCanopy').mosaic()
     
     # encode the images into unique codes
     # code will be a 7 digit value where each group of values
@@ -188,11 +210,11 @@ def main():
     fills = [cc_img, ch_img]
 
     # output name for export
-    output_names = ['Fuels_CC', 'Fuels_CH']
+    output_names = ['CC', 'CH']
     
     # define the collection to dump data to
     # each output will be an individual image so can be folder
-    output_folder = "projects/pyregence-ee/assets/conus/fuels"
+    output_folder = out_folder_path
 
     # loop through the variables to run the regressions
     for i, var in enumerate(vars):                    
@@ -254,7 +276,7 @@ def main():
             
             regress_processed = (
                 regress
-                .mask(dist_mask)
+                .updateMask(dist_img)
                 .clamp(0,100)
                 .toInt16()
                 .remap(values,bins,0)
@@ -285,7 +307,7 @@ def main():
 
             regress_processed = (
                 regress
-                .mask(dist_mask)
+                .updateMask(dist_img)
                 .toInt16()
                 .remap(values,bins,0)
                 .multiply(10)
@@ -298,13 +320,13 @@ def main():
                 )
         
         # define where to export image
-        output_asset = f"{output_folder}/{output_names[i]}_{version}"
+        output_asset = f"{output_folder}/{output_names[i]}"
 
         # set up export task
         # export has specific CONUS projection/spatial extent
         task = ee.batch.Export.image.toAsset(
             image=regress_processed,
-            description=f"export_{output_names[i]}_{version}",
+            description=f"export_{output_names[i]}_{os.path.basename(dist_img_path)}",
             assetId=output_asset,
             region=cc_img.geometry(),
             crsTransform=geo_t,
