@@ -95,14 +95,32 @@ def main():
         help="path to config file",
     )
 
+    parser.add_argument(
+        "-d",
+        "--dist_img_path",
+        type=str,
+        help="asset path of input DIST img"
+
+    )
+
+    parser.add_argument(
+        "-o",
+        "--out_folder_path",
+        type=str,
+        help="asset path of output folder"
+
+    )
     args = parser.parse_args()
 
+    dist_img_path = args.dist_img_path
+    out_folder_path = args.out_folder_path
+    
     # parse config file
     with open(args.config) as file:
         config = yaml.full_load(file)
 
     geo_info = config["geo"]
-    version = config["version"].get('latest')
+    #version = config["version"].get('latest')
 
     # extract out geo information from config
     geo_t = geo_info["crsTransform"]
@@ -124,7 +142,8 @@ def main():
 
     # define a list of zone information
     # does a skip from 67 to 98...not sure why just the zone numbers
-    zones = list(range(1, 67)) + [98, 99]
+    #zones = list(range(1, 67)) + [98, 99] # all CONUS zones used for FireFactor.. check which zones your AOI falls in and provide them as a list
+    zones = [6] # For AFF project, entire AOI falls in LF Zone 6
 
     # define the image collections for the raster data needed for calculations
     bps_ic = ee.ImageCollection("projects/pyregence-ee/assets/conus/landfire/bps")
@@ -163,12 +182,17 @@ def main():
         .limit(1, "system:time_start")
         .first()
     )
-    # FM40 image from previous time, used when there is no distubance
-    oldfm40_img = ee.Image(
-        fbfm40_ic.filter(ee.Filter.eq("version", 200))
-        .limit(1, "system:time_start")
-        .first()
-    )
+    # FM40 image from previous time, used when there is no distubance 
+    # oldfm40_img = ee.Image(
+    #     fbfm40_ic.filter(ee.Filter.eq("version", 200))
+    #     .limit(1, "system:time_start")
+    #     .first()
+    # )
+    # FOR AFF do we use FireFactor v1 updated FM40 and update in only AFF disturbed pixels? 
+    # or do we update from LF2016 2019 capable like we start with for FireFactor and combine FF v1 DIST img w AFF DIST img?
+    # if we do second option, then we won't have WUI nonburnable conversions in there, but if we do first option, the most important DIST from the last 10 years will take precedent at each pixel
+    oldfm40_img = ee.ImageCollection("projects/pyregence-ee/assets/conus/fuels/Fuels_FM40_collection_fix_bug_052022").select('new_fbfm40').mosaic()
+    
     # zone image to identify which pixel belong to zone
     zone_img = ee.Image("projects/pyregence-ee/assets/conus/landfire/zones_image")
 
@@ -176,9 +200,10 @@ def main():
     # this will update with new disturbance info
     # can update with version tags of code
     dist_img = ee.Image(
-        f"projects/pyregence-ee/assets/workflow_assets/dist_all_{version}"
-    ).unmask(0)
-
+        f"{dist_img_path}"
+    )#.unmask(0) # to ensure encoded imgs that get remapped to new FM40 lookup values only occur in the original masked DIST img pixels
+    
+    
     # encode the images into unique codes
     # code will be a 16 digit value where each group of values
     # are the individual values from the images
@@ -200,92 +225,80 @@ def main():
 
     # define the collection to dump data to
     # this needs to be an image collection as each zone is exported individually
-    output_ic = f"projects/pyregence-ee/assets/conus/fuels/Fuels_FM40_collection_{version}"
+    output_ic = f"{out_folder_path}/fm40_collection" # canopy guide is exported as zone-wise imgs into its own imageCollection, so we need to back up one path to the parent folder and make a canopy guide imgColl
+    os.popen(f"earthengine create collection {output_ic}").read()
     
-    # if output img collection already exists and/or input dist_all asset does not exist, raise error and exit 
-    # (avoids starting export tasks that immediately fail)
-    ee_fuels_assets = os.popen(f'earthengine ls projects/pyregence-ee/assets/conus/fuels').read()
-    ee_dist_assets = os.popen(f'earthengine ls projects/pyregence-ee/assets/workflow_assets').read()
-    output_exists = output_ic in ee_fuels_assets
-    input_dist_exists = f"projects/pyregence-ee/assets/workflow_assets/dist_all_{version}" in ee_dist_assets
-    if input_dist_exists:
+    # loop through each zone to do the FM40 calculation
+    for zone in zones:
+        # skip over zone 11, there is no zone 11
+        if zone == 11:
+            continue
+
+        # plug in the zone value into the table uri string
+        uri = base_uri.format(zone)
+        # read in the table from cloud storage
+        blob = ee.Blob(uri)
+
+        # parse the table as an ee.Dictionary
+        table = parse_txt(blob)
+
+        # legacy code to encode the table values if not done so already
+        # from_codes = ee.List(encode_table(table))
+
+        # read in the encoded value list as numeric
+        from_codes = to_numeric(ee.List(table.get("encoded")))
+        # read the list of values to remap to as numeric
+        to_codes = to_numeric(ee.List(table.get("NewFBFM40")))
+
+        # apply the remapping encoded values -> new FM40 values
+        zone_fm40_remapped = encoded_img.remap(from_codes, to_codes) 
         
-        if output_ic not in ee_fuels_assets:
-            # have to create the imgCollection asset first
-            os.popen(f'earthengine create collection {output_ic}')
-            logger.info(f'Creating collection: {output_ic}')
-        
-        # loop through each zone to do the FM40 calculation
-        for zone in zones:
-            # skip over zone 11, there is no zone 11
-            if zone == 11:
-                continue
+        # replace all values in old fm40 raster that are disturbed with new fm40 values
+        # then mask areas that are not current zone
+        zone_fm40 = (
+            oldfm40_img.where(dist_img.selfMask(), zone_fm40_remapped) # .where(dist_img.selfMask(), zone_fm40_remapped) returns input value if test value is false, i.e. if no 
+            .updateMask(zone_img.eq(zone))
+            .rename("new_fbfm40")
+            .uint16()
+        )
 
-            # plug in the zone value into the table uri string
-            uri = base_uri.format(zone)
-            # read in the table from cloud storage
-            blob = ee.Blob(uri)
+        # create an image with information of what happened where
+        # if disturbed and has new FM40 value flag = 0
+        # if not distubed (ie old FM40 value) flag = 1
+        # if disturbed and new FM40 has no remapped code flag = 2
+        # if outside of zone flag = 4
+        flags = (
+            dist_img.Not()
+            .where(zone_fm40.selfMask().eq(0), 2)
+            .where(zone_img.neq(zone), 3)
+            .updateMask(zone_img.selfMask())
+            .uint8()
+            .rename("qa_flags")
+        )
 
-            # parse the table as an ee.Dictionary
-            table = parse_txt(blob)
+        # combine new FM40 layer and flags
+        zone_out = ee.Image.cat([zone_fm40, flags,]).set(
+            "zone", zone
+        )  # set zone metadata
 
-            # legacy code to encode the table values if not done so already
-            # from_codes = ee.List(encode_table(table))
-
-            # read in the encoded value list as numeric
-            from_codes = to_numeric(ee.List(table.get("encoded")))
-            # read the list of values to remap to as numeric
-            to_codes = to_numeric(ee.List(table.get("NewFBFM40")))
-
-            # apply the remapping encoded values -> new FM40 values
-            zone_fm40_remapped = encoded_img.remap(from_codes, to_codes)
-
-            # replace all values in old fm40 raster that are disturbed with new fm40 values
-            # then mask areas that are not current zone
-            zone_fm40 = (
-                oldfm40_img.where(dist_img.mask(), zone_fm40_remapped)
-                .updateMask(zone_img.eq(zone))
-                .rename("new_fbfm40")
-                .uint16()
-            )
-
-            # create an image with information of what happened where
-            # if disturbed and has new FM40 value flag = 0
-            # if not distubed (ie old FM40 value) flag = 1
-            # if disturbed and new FM40 has no remapped code flag = 2
-            # if outside of zone flag = 4
-            flags = (
-                dist_img.Not()
-                .where(zone_fm40.mask().eq(0), 2)
-                .where(zone_img.neq(zone), 3)
-                .updateMask(zone_img.mask())
-                .uint8()
-                .rename("qa_flags")
-            )
-
-            # combine new FM40 layer and flags
-            zone_out = ee.Image.cat([zone_fm40, flags,]).set(
-                "zone", zone
-            )  # set zone metadata
-
-            # set up export task
-            # each zone will be all of CONUS with same projection/spatial extent
-            # this is to prevent any pixel misalignment at edges of zone
-            asset_id = output_ic + f"/Fuels_FM40_{zone:02d}"
-            task = ee.batch.Export.image.toAsset(
-                image=zone_out,
-                description=f"Zone{zone:02d}_FM40_export_{version}",
-                assetId=asset_id,
-                region=zone_img.geometry(),
-                crsTransform=geo_t, 
-                crs=crs, 
-                maxPixels=1e12,
-                pyramidingPolicy={".default": "mode"},
-            )
-            logger.info(f"Exporting {asset_id}")
-            task.start()  # kick of export task
-    else:
-        raise FileNotFoundError('input dist asset does not exist')
+        # set up export task
+        # each zone will be all of CONUS with same projection/spatial extent
+        # this is to prevent any pixel misalignment at edges of zone
+        asset_id = output_ic + f"/FM40_zone{zone:02d}"
+        task = ee.batch.Export.image.toAsset(
+            image=zone_out.clip(dist_img.geometry()), #clip to just the AFF study area bbox
+            description=f"Zone{zone:02d}_FM40_export_{os.path.basename(dist_img_path)}",
+            assetId=asset_id,
+            region=zone_img.geometry(),
+            #crsTransform=geo_t, 
+            scale=scale,
+            crs=crs, 
+            maxPixels=1e12,
+            pyramidingPolicy={".default": "mode"},
+        )
+        logger.info(f"Exporting {asset_id}")
+        task.start()  # kick of export task
+    
 
 # main level process if running as script
 if __name__ == "__main__":

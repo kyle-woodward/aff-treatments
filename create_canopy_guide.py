@@ -85,7 +85,7 @@ def main():
     
     # initalize new cli parser
     parser = argparse.ArgumentParser(
-        description="CLI process for generating new CBH and CBD."
+        description="CLI process for generating new canopy guide."
     )
 
     parser.add_argument(
@@ -95,14 +95,32 @@ def main():
         help="path to config file",
     )
 
+    parser.add_argument(
+        "-d",
+        "--dist_img_path",
+        type=str,
+        help="asset path of input DIST img"
+
+    )
+
+    parser.add_argument(
+        "-o",
+        "--out_folder_path",
+        type=str,
+        help="asset path of output folder"
+
+    )
     args = parser.parse_args()
 
+    dist_img_path = args.dist_img_path
+    out_folder_path = args.out_folder_path
+    
     # parse config file
     with open(args.config) as file:
         config = yaml.full_load(file)
 
     geo_info = config["geo"]
-    version = config["version"].get('latest')
+    #version = config["version"].get('latest')
 
     # extract out geo information from config
     geo_t = geo_info["crsTransform"]
@@ -123,7 +141,8 @@ def main():
 
     # define a list of zone information
     # does a skip from 67 to 98...not sure why just the zone numbers
-    zones = list(range(1, 67)) + [98, 99]
+    #zones = list(range(1, 67)) + [98, 99] # all CONUS zones used for FireFactor.. check which zones your AOI falls in and provide them as a list
+    zones = [6] # For AFF project, entire AOI falls in LF Zone 6
 
     # define the image collections for the raster data needed for calculations
     bps_ic = ee.ImageCollection("projects/pyregence-ee/assets/conus/landfire/bps")
@@ -168,6 +187,8 @@ def main():
     #     .limit(1, "system:time_start")
     #     .first()
     # )
+    
+    old_cg = ee.ImageCollection("projects/pyregence-ee/assets/conus/fuels/canopy_guide_2021_12_v1").select('newCanopy').mosaic()
     # zone image to identify which pixel belong to zone
     zone_img = ee.Image("projects/pyregence-ee/assets/conus/landfire/zones_image")
 
@@ -175,7 +196,7 @@ def main():
     # this will update with new disturbance info
     # can update with version tags of code
     dist_img = ee.Image(
-        f"projects/pyregence-ee/assets/workflow_assets/dist_all_{version}"
+        f"{dist_img_path}"
     ).unmask(0)
 
     # encode the images into unique codes
@@ -199,95 +220,85 @@ def main():
 
     # define the collection to dump data to
     # this needs to be an image collection as each zone is exported individually
-    output_ic = f"projects/pyregence-ee/assets/conus/fuels/canopy_guide_{version}"
+    # output_ic = f"projects/pyregence-ee/assets/conus/fuels/canopy_guide_{version}"
+    output_ic = f"{out_folder_path}/canopy_guide_collection" # canopy guide is exported as zone-wise imgs into its own imageCollection, so we need to back up one path to the parent folder and make a canopy guide imgColl
+    os.popen(f"earthengine create collection {output_ic}")
     
-    # if output img collection already exists and/or input dist_all asset does not exist, raise error and exit 
-    # (avoids starting export tasks that immediately fail)
-    ee_fuels_assets = os.popen(f'earthengine ls projects/pyregence-ee/assets/conus/fuels').read()
-    ee_dist_assets = os.popen(f'earthengine ls projects/pyregence-ee/assets/workflow_assets').read()
-    output_exists = output_ic in ee_fuels_assets
-    input_dist_exists = f"projects/pyregence-ee/assets/workflow_assets/dist_all_{version}" in ee_dist_assets
-    if input_dist_exists:
-        
-        if output_ic not in ee_fuels_assets:
-            # have to create the imgCollection asset first
-            os.popen(f'earthengine create collection {output_ic}')
-            logger.info(f'Creating collection: {output_ic}')
-        
-        # loop through each zone to do the FM40 calculation
-        for zone in zones:
-            # skip over zone 11, there is no zone 11
-            if zone == 11:
-                continue
+    # loop through each zone to do the FM40 calculation
+    for zone in zones:
+        # skip over zone 11, there is no zone 11
+        if zone == 11:
+            continue
 
-            # plug in the zone value into the table uri string
-            uri = base_uri.format(zone)
-            # read in the table from cloud storage
-            blob = ee.Blob(uri)
+        # plug in the zone value into the table uri string
+        uri = base_uri.format(zone)
+        # read in the table from cloud storage
+        blob = ee.Blob(uri)
 
-            # parse the table as an ee.Dictionary
-            table = parse_txt(blob)
+        # parse the table as an ee.Dictionary
+        table = parse_txt(blob)
 
-            # legacy code to encode the table values if not done so already
-            # from_codes = ee.List(encode_table(table))
+        # legacy code to encode the table values if not done so already
+        # from_codes = ee.List(encode_table(table))
 
-            # read in the encoded value list as numeric
-            from_codes = to_numeric(ee.List(table.get("encoded")))
-            # read the list of values to remap to as numeric
-            to_codes = to_numeric(ee.List(table.get("NewCanopy")))
+        # read in the encoded value list as numeric
+        from_codes = to_numeric(ee.List(table.get("encoded")))
+        # read the list of values to remap to as numeric
+        to_codes = to_numeric(ee.List(table.get("NewCanopy")))
 
-            # apply the remapping encoded values -> NewCanopy values
-            zone_newcanopy_remapped = encoded_img.remap(from_codes, to_codes) #non-matches return null (masked) value
+        # apply the remapping encoded values -> NewCanopy values
+        zone_newcanopy_remapped = encoded_img.remap(from_codes, to_codes) #non-matches return null (masked) value
 
-            dist_high_harvest = dist_img.selfMask().lte(333).bitwiseAnd(dist_img.selfMask().gte(331)) # high harvest = 1
+        dist_high_harvest = dist_img.selfMask().lte(333).bitwiseAnd(dist_img.selfMask().gte(331)) # high harvest = 1
 
-            # Initialize a CG raster of 1's and burn in actual remapped CG values overtop (CG=1 means leave fuels value as-is)
-            # then mask areas that are not current zone
-            zone_newcanopy = (           
-                ee.Image.constant(1).where(dist_img.mask(), zone_newcanopy_remapped) #returns 1 if zone_newcanopy_remapped is null in disturbed area
-                .where(dist_high_harvest.eq(1),0) # zero out CG in high harvest disturbed areas
-                .updateMask(zone_img.eq(zone))
-                .rename("newCanopy")
-                .byte() #valid values are 0-3
-            )
-                    
-            # create an image with information of what happened where
-            # if disturbed and has new value flag = 0
-            # if not distubed (i.e. initial 1 value) flag = 1
-            # if disturbed and has no remapped code flag = 2
-            # if outside of zone flag = 3
-            flags = (
-                dist_img.Not() 
-                .where(zone_newcanopy.add(1).mask().eq(0), 2) # .add(1) so 0 is no longer a valid value and can be masked
-                .where(zone_img.neq(zone), 3)
-                .updateMask(zone_img.mask())
-                .uint8()
-                .rename("qa_flags")
-            )
+        # Initialize a CG raster of 1's and burn in actual remapped CG values overtop (CG=1 means leave fuels value as-is)
+        # then mask areas that are not current zone        
+        zone_newcanopy = (           
+            #ee.Image.constant(1) 
+            old_cg # AFF - starting with FFv1 canopy guide, not making CG from scratch
+            .where(dist_img.selfMask(), zone_newcanopy_remapped) #returns 1 if zone_newcanopy_remapped is null in disturbed area
+            .where(dist_high_harvest.eq(1),0) # zero out CG in high harvest disturbed areas
+            .updateMask(zone_img.eq(zone))
+            .rename("newCanopy")
+            .byte() #valid values are 0-3
+        )
+                
+        # create an image with information of what happened where
+        # if disturbed and has new value flag = 0
+        # if not distubed (i.e. initial 1 value) flag = 1
+        # if disturbed and has no remapped code flag = 2
+        # if outside of zone flag = 3
+        flags = (
+            dist_img.Not() 
+            .where(zone_newcanopy.add(1).selfMask().eq(0), 2) # .add(1) so 0 is no longer a valid value and can be masked
+            .where(zone_img.neq(zone), 3)
+            .updateMask(zone_img.selfMask())
+            .uint8()
+            .rename("qa_flags")
+        )
 
-            # combine new CG layer and flags
-            zone_out = ee.Image.cat([zone_newcanopy, flags]).set(
-                "zone", zone
-            )  # set zone metadata
+        # combine new CG layer and flags
+        zone_out = ee.Image.cat([zone_newcanopy, flags]).set(
+            "zone", zone
+        )  # set zone metadata
 
-            # set up export task
-            # each zone will be all of CONUS with same projection/spatial extent
-            # this is to prevent any pixel misalignment at edges of zone
-            asset_id = output_ic + f"/new_canopy_zone{zone:02d}"
-            task = ee.batch.Export.image.toAsset(
-                image=zone_out,
-                description=f"Zone{zone:02d}_canopy_guide_export_{version}",
-                assetId=asset_id,
-                region=zone_img.geometry(),
-                crsTransform=geo_t, 
-                crs=crs,
-                maxPixels=1e12,
-                pyramidingPolicy={".default": "mode"},
-            )
-            logger.info(f"Exporting {asset_id}")
-            task.start()
-    else:
-        raise FileNotFoundError('input dist asset does not exist')
+        # set up export task
+        # each zone will be all of CONUS with same projection/spatial extent
+        # this is to prevent any pixel misalignment at edges of zone
+        asset_id = output_ic + f"/new_canopy_zone{zone:02d}"
+        task = ee.batch.Export.image.toAsset(
+            image=zone_out,
+            description=f"Zone{zone:02d}_canopy_guide_export_{os.path.basename(dist_img_path)}",
+            assetId=asset_id,
+            region=dist_img.geometry(),
+            scale=scale,
+            crs=crs,
+            maxPixels=1e12,
+            pyramidingPolicy={".default": "mode"},
+        )
+        logger.info(f"Exporting {asset_id}")
+        task.start()
+    
         
 # main level process if running as script
 if __name__ == "__main__":
