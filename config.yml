@@ -1,0 +1,13 @@
+geo: # using exact geo info thats shown in LF 2019 2.0.0 image
+    crsTransform: # fire factor conus wide crsTransform
+        - 30
+        - 0
+        - -2362425.0 # old: -23650345.0 
+        - 0
+        - -30
+        - 3177435 # old: 3185055.0
+    crs: "EPSG:32611" # utm zone 11n "EPSG:5070" 
+    dimensions:
+        - 154208
+        - 97283
+    scale: 30
