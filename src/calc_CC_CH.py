@@ -110,7 +110,7 @@ def main():
         config = yaml.full_load(file)
 
     geo_info = config["geo"]
-    version = config["version"].get('latest')
+    #version = config["version"].get('latest')
 
     # extract out geo information from config
     geo_t = geo_info["crsTransform"]
@@ -139,6 +139,7 @@ def main():
     # cc_img = ee.Image(
     #     cc_ic.filter(ee.Filter.eq("version", 200)).limit(1, "system:time_start").first()
     # )
+    # AFF - we use FFv1 layers as baseline, updating only in DIST img areas
     cc_img = ee.Image("projects/pyregence-ee/assets/conus/fuels/Fuels_CC_2021_12") # using FFv1 as baseline
     # Canopy height image
     # ch_img = ee.Image(
@@ -183,9 +184,8 @@ def main():
     dist_mask = dist_img.mask() # this creates 1's everywhere include outside disturbed areas. not using
 
     #canopy guide collection for post-processing ruleset
-    # create cg collection path from the dist_img_path
+    # AFF - create cg collection path from the dist_img_path
     cg_path = dist_img_path.replace('treatment_scenarios','fuelscapes_scenarios') + '/canopy_guide_collection'
-    logger.info('CG path:',cg_path)
     canopy_guide = ee.ImageCollection(f"{cg_path}").select('newCanopy').mosaic()
     
     # encode the images into unique codes
@@ -333,8 +333,10 @@ def main():
             crs=crs,
             maxPixels=1e12,
         )
-        task.start()  # kick of export task
-        logger.info('export task started')
+        task.start()  # kick off export task
+        logger.info(f"Exporting {output_asset}")
+        # logger.info(f"CG path: {cg_path}")
+        # logger.info(f"would export {output_asset}")
 # main level process if running as script
 if __name__ == "__main__":
     main()
