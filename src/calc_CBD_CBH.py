@@ -337,7 +337,7 @@ def main():
     )
     
     # define where to export image
-    output_asset = f"{output_folder}/CBH"
+    output_asset = f"{output_folder}/CBD"
 
     # set up export task
     # export has specific CONUS projection/spatial extent (same as other images)
