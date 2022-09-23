@@ -15,11 +15,11 @@ _dict = {"log":
          "0.25": {"sm_overshoot":2.5, "med_overshoot":1.5, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
          "0.30": {"sm_overshoot":3.0, "med_overshoot":1.5, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
          "0.35": {"sm_overshoot":3.0, "med_overshoot":1.5, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
-         "0.40": {"sm_overshoot":3.0, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
-         "0.45": {"sm_overshoot":3.0, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
-         "0.50": {"sm_overshoot":3.0, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
-         "0.55": {"sm_overshoot":3.75, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
-         "0.60": {"sm_overshoot":4.0, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01}
+         "0.40": {"sm_overshoot":3.25, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
+         "0.45": {"sm_overshoot":3.25, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
+         "0.50": {"sm_overshoot":3.50, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
+         "0.55": {"sm_overshoot":3.75, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 0.8, "pt_spacing": 1.8},
+         "0.60": {"sm_overshoot":4.0, "med_overshoot":2.5, "default_overshoot":1.5, "mask_spacing": 0.8, "pt_spacing": 1.8}
          },
          
          "norm":
@@ -47,7 +47,7 @@ def setall(d, keys, value):
 def get_dials(pct_trt:float,distro:str):
     _dict_distro = _dict[distro]
     _dict_distro_all_keys = {}
-    # bin all possible floats within defined range to the generalized bin numbers in _dict
+    # bin all possible floats within defined range to the generalized binned keys in _dict
     setall(_dict_distro_all_keys, [round(i,3) for i in np.arange(0.0, 0.05, 0.001)], _dict_distro["0.05"])
     setall(_dict_distro_all_keys, [round(i,3) for i in np.arange(0.05, 0.1, 0.001)], _dict_distro["0.10"])
     setall(_dict_distro_all_keys, [round(i,3) for i in np.arange(0.1, 0.15, 0.001)], _dict_distro["0.15"])
@@ -62,7 +62,7 @@ def get_dials(pct_trt:float,distro:str):
     setall(_dict_distro_all_keys, [round(i,3) for i in np.arange(0.55, 0.6, 0.001)], _dict_distro["0.60"])
     setall(_dict_distro_all_keys, [round(i,3) for i in np.arange(0.6, 0.65, 0.001)], _dict_distro["0.60"])
     if pct_trt not in _dict_distro_all_keys.keys():
-        raise ValueError("percent treatment value is not in possible range")
+        raise ValueError("percent treatment value {pct_trt} is not in all_keys dictionary")
     indexed_dict = _dict_distro_all_keys[pct_trt]
     return indexed_dict.values()
 
