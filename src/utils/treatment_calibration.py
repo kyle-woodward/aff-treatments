@@ -15,27 +15,27 @@ _dict = {"log":
          "0.25": {"sm_overshoot":2.5, "med_overshoot":1.5, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
          "0.30": {"sm_overshoot":3.0, "med_overshoot":1.5, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
          "0.35": {"sm_overshoot":3.0, "med_overshoot":1.5, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
-         "0.40": {"sm_overshoot":3.25, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
-         "0.45": {"sm_overshoot":3.25, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
-         "0.50": {"sm_overshoot":3.50, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
-         "0.55": {"sm_overshoot":3.75, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 0.8, "pt_spacing": 1.8},
-         "0.60": {"sm_overshoot":4.0, "med_overshoot":2.5, "default_overshoot":1.5, "mask_spacing": 0.8, "pt_spacing": 1.8}
+         "0.40": {"sm_overshoot":3.0, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.0, "pt_spacing": 1.9},
+         "0.45": {"sm_overshoot":3.0, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.0, "pt_spacing": 1.9},
+         "0.50": {"sm_overshoot":3.0, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.0, "pt_spacing": 1.9},
+         "0.55": {"sm_overshoot":3.5, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 0.8, "pt_spacing": 1.7},
+         "0.60": {"sm_overshoot":3.75, "med_overshoot":2.5, "default_overshoot":1.5, "mask_spacing": 0.7, "pt_spacing": 1.6}
          },
          
          "norm":
-          {"0.00": {"sm_overshoot":0, "med_overshoot":0, "default_overshoot":0},
-         "0.05": {"sm_overshoot":1.5, "med_overshoot":1.5, "default_overshoot":1.5},
-         "0.10": {"sm_overshoot":1.5, "med_overshoot":1.5, "default_overshoot":1.5},
-         "0.15": {"sm_overshoot":1.5, "med_overshoot":2, "default_overshoot":1.5},
-         "0.20": {"sm_overshoot":2, "med_overshoot":2, "default_overshoot":1.5},
-         "0.25": {"sm_overshoot":2, "med_overshoot":2, "default_overshoot":1.5},
-         "0.30": {"sm_overshoot":2.5, "med_overshoot":2, "default_overshoot":1.5},
-         "0.35": {"sm_overshoot":2.5, "med_overshoot":2, "default_overshoot":1.5},
-         "0.40": {"sm_overshoot":3, "med_overshoot":2, "default_overshoot":1.5},
-         "0.45": {"sm_overshoot":3, "med_overshoot":2.5, "default_overshoot":1.5},
-         "0.50": {"sm_overshoot":3.5, "med_overshoot":2.5, "default_overshoot":1.5},
-         "0.55": {"sm_overshoot":4, "med_overshoot":2.5, "default_overshoot":1.5},
-         "0.60": {"sm_overshoot":4.5, "med_overshoot":2.5, "default_overshoot":1.5}
+          {"0.00": {"sm_overshoot":0, "med_overshoot":0, "default_overshoot":0, "mask_spacing": 0, "pt_spacing": 0},
+         "0.05": {"sm_overshoot":2.0, "med_overshoot":1.5, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
+         "0.10": {"sm_overshoot":2.25, "med_overshoot":1.5, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
+         "0.15": {"sm_overshoot":2.25, "med_overshoot":1.5, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
+         "0.20": {"sm_overshoot":2.50, "med_overshoot":1.5, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
+         "0.25": {"sm_overshoot":2.75, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
+         "0.30": {"sm_overshoot":3.25, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
+         "0.35": {"sm_overshoot":3.50, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.1, "pt_spacing": 2.01},
+         "0.40": {"sm_overshoot":3.75, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.0, "pt_spacing": 1.9},
+         "0.45": {"sm_overshoot":3.75, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.0, "pt_spacing": 1.9},
+         "0.50": {"sm_overshoot":4.0, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 1.0, "pt_spacing": 1.9},
+         "0.55": {"sm_overshoot":4.25, "med_overshoot":2.0, "default_overshoot":1.5, "mask_spacing": 0.8, "pt_spacing": 1.7},
+         "0.60": {"sm_overshoot":4.75, "med_overshoot":2.5, "default_overshoot":1.5, "mask_spacing": 0.7, "pt_spacing": 1.6}
          }
         }
 
