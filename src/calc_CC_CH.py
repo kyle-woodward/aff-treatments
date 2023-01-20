@@ -280,9 +280,9 @@ def main():
                 .clamp(0,100)
                 .toInt16()
                 .remap(values,bins,0)
-                .unmask(fills[i])
                 .where(canopy_guide.eq(0), 0) # zero out where CG is 0
                 .where(cc_img.eq(0), 0) # zero out where CC 2019 is 0
+                .unmask(fills[i])
                 .updateMask(zone_img)
                 .rename(var.lower())
                 )
@@ -312,9 +312,9 @@ def main():
                 .remap(values,bins,0)
                 .multiply(10)
                 .clamp(0,510)
-                .unmask(fills[i])
                 .where(canopy_guide.eq(0), 0) # zero out where CG is 0
                 .where(cc_img.eq(0), 0) # zero out where CC is 0
+                .unmask(fills[i])
                 .updateMask(zone_img)
                 .rename(var.lower()) 
                 )

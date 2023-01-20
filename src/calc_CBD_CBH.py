@@ -186,11 +186,12 @@ def main():
     canopy_guide = ee.ImageCollection(f"{cg_path}").select('newCanopy').mosaic()
     
     # Here we are using the newly generated CC and CH as the midpoint images instead of FVH/C_Midpoint images
-    # CC and CH are already binned to midpoint values during their calculation, only need to divide CH by 10 to get unscaled midpoint
+    # CC and CH are already binned to midpoint values during their calculation, 
     # Post-Disturbance Cover midpoint 
-    post_cover_mid_img = ee.Image(dist_img_path.replace('treatment_scenarios','fuelscapes_scenarios') + '/CC')
+    new_cc = ee.Image(dist_img_path.replace('treatment_scenarios','fuelscapes_scenarios') + '/CC')
+    post_cover_mid_img = new_cc
     
-    # Post-Disturbance Height midpoint 
+    # Post-Disturbance Height midpoint, only need to divide CH by 10 to get unscaled height midpoint
     new_ch = ee.Image(dist_img_path.replace('treatment_scenarios','fuelscapes_scenarios') + '/CH')
     post_height_mid_img = new_ch.divide(10)
     
@@ -250,15 +251,15 @@ def main():
         .multiply(10) #scale decimal regress output
         .toInt16()
         .clamp(0,100)
-        .unmask(cbh_img) # fill un-disturbed pixels with fuel value
         .where(canopy_guide.eq(0), 0) # 0 where CG is 0
         .where(canopy_guide.eq(2), 100) # 100 (10m) where CG is 2
-        .where(cc_img.eq(0), 0) # 0 where CG is 0
-        .updateMask(zone_img)
+        .where(new_cc.eq(0), 0) # 0 where new CC is 0
         .rename('CBH')
         )
     cbh = cbh.where(cbh.gt(new_ch), new_ch.multiply(0.7).toInt16()).rename('CBH') # CBH can't be larger than CH; where it is, reduce CBH to 2/3 of CH
-    
+    cbh = (cbh.unmask(cbh_img) # fill un-disturbed pixels with baseline fuel value
+        .updateMask(zone_img) # cleans up CONUS-wide boundaries
+        )
     # define where to export image
     output_asset = f"{output_folder}/CBH"
 
@@ -327,11 +328,11 @@ def main():
         .multiply(100)
         .clamp(0,45)
         .toInt16()
-        .unmask(cbd_img) # fill un-disturbed pixels with pre- fuel value
         .where(canopy_guide.eq(0), 0) # 0 where CG is 0
         .where(canopy_guide.eq(2), 1) # 1 (0.012kg/m^3) where CG is 2
         .where(canopy_guide.eq(3), 1) # 1 (0.012kg/m^3) where CG is 3
-        .where(cc_img.eq(0), 0) # 0 where CC 2019 is 0
+        .where(new_cc.eq(0), 0) # 0 where new CC is 0
+        .unmask(cbd_img) # fill un-disturbed pixels with pre- fuel value
         .updateMask(zone_img)
         .rename("CBD")
     )
