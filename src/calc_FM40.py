@@ -140,6 +140,13 @@ def main():
     evhr_name = "EVHR"
     bpsrf_name = "BPSRF"
 
+    # define disturbance image used for the DIST codes
+    # this will update with new disturbance info
+    # can update with version tags of code
+    dist_img = ee.Image(
+        f"{dist_img_path}"
+    )#.unmask(0) # to ensure encoded imgs that get remapped to new FM40 lookup values only occur in the original masked DIST img pixels 
+
     # define a list of zone information
     # does a skip from 67 to 98...not sure why just the zone numbers
     #zones = list(range(1, 67)) + [98, 99] # all CONUS zones used for FireFactor.. check which zones your AOI falls in and provide them as a list
@@ -196,18 +203,10 @@ def main():
     # FOR AFF do we use FireFactor v1 updated FM40 and update in only AFF disturbed pixels? 
     # or do we update from LF2016 2019 capable like we start with for FireFactor and combine FF v1 DIST img w AFF DIST img?
     # if we do second option, then we won't have WUI nonburnable conversions in there, but if we do first option, the most important DIST from the last 10 years will take precedent at each pixel
-    oldfm40_img = ee.ImageCollection("projects/pyregence-ee/assets/conus/fuels/Fuels_FM40_collection_fix_bug_052022").select('new_fbfm40').mosaic()
+    oldfm40_img = ee.Image("projects/pyregence-ee/assets/conus/fuels/Fuels_FM40_WUI_IrrigatedConversion_2022_10")
     
     # zone image to identify which pixel belong to zone
     zone_img = ee.Image("projects/pyregence-ee/assets/conus/landfire/zones_image")
-
-    # define disturbance image used for the DIST codes
-    # this will update with new disturbance info
-    # can update with version tags of code
-    dist_img = ee.Image(
-        f"{dist_img_path}"
-    )#.unmask(0) # to ensure encoded imgs that get remapped to new FM40 lookup values only occur in the original masked DIST img pixels
-    
     
     # encode the images into unique codes
     # code will be a 16 digit value where each group of values

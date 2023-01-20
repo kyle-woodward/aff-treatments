@@ -139,6 +139,13 @@ def main():
     evhr_name = "EVHR"
     bpsrf_name = "BPSRF"
 
+    # define disturbance image used for the DIST codes
+    # this will update with new disturbance info
+    # can update with version tags of code
+    dist_img = ee.Image(
+        f"{dist_img_path}"
+    ).unmask(0)
+    
     # define a list of zone information
     # does a skip from 67 to 98...not sure why just the zone numbers
     #zones = list(range(1, 67)) + [98, 99] # all CONUS zones used for FireFactor.. check which zones your AOI falls in and provide them as a list
@@ -196,13 +203,6 @@ def main():
     old_cg = ee.ImageCollection("projects/pyregence-ee/assets/conus/fuels/canopy_guide_2021_12_v1").select('newCanopy').mosaic()
     # zone image to identify which pixel belong to zone
     zone_img = ee.Image("projects/pyregence-ee/assets/conus/landfire/zones_image")
-
-    # define disturbance image used for the DIST codes
-    # this will update with new disturbance info
-    # can update with version tags of code
-    dist_img = ee.Image(
-        f"{dist_img_path}"
-    ).unmask(0)
 
     # encode the images into unique codes
     # code will be a 16 digit value where each group of values
