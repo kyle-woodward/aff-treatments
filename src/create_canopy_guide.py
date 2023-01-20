@@ -142,7 +142,12 @@ def main():
     # define a list of zone information
     # does a skip from 67 to 98...not sure why just the zone numbers
     #zones = list(range(1, 67)) + [98, 99] # all CONUS zones used for FireFactor.. check which zones your AOI falls in and provide them as a list
-    zones = [6] # For AFF project, entire AOI falls in LF Zone 6
+    # zone image to identify which pixel belong to zone
+    zone_img = ee.Image("projects/pyregence-ee/assets/conus/landfire/zones_image")
+    zones_fc = ee.FeatureCollection("projects/pyregence-ee/assets/conus/landfire/zones")
+    # instead of listing all Zone numbers in CONUS (Firefactor), we dynamically find zone numbers of zones intersecting the DIST img footprint
+    zones = zones_fc.filterBounds(dist_img.geometry()).aggregate_array('ZONE_NUM').getInfo() # spatial intersect finding Landfire zones that overlap disturbance img footprint
+    logger.info(zones)
 
     # define the image collections for the raster data needed for calculations
     bps_ic = ee.ImageCollection("projects/pyregence-ee/assets/conus/landfire/bps")
