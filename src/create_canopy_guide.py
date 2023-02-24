@@ -7,20 +7,31 @@ Usage:
 import os
 import ee
 import yaml
-import argparse
 import logging
-from utils.ee_csv_parser import parse_txt, to_numeric
+from src.utils.ee_csv_parser import parse_txt, to_numeric
+from src.utils.cloud_utils import poll_submitted_task
+import datetime
 
+repo_dir =  os.path.abspath(os.path.join(__file__ ,"../.."))
+date_id = datetime.datetime.utcnow().strftime("%Y-%m-%d").replace('-','') # like 20221216
 logging.basicConfig(
     format="%(asctime)s %(message)s",
     datefmt="%Y-%m-%d %I:%M:%S %p",
     level=logging.WARNING,
-    filename=os.path.join(os.path.dirname(__file__), 'create_canopy_guide.log')
+    filename = os.path.join(repo_dir,"log",f"{date_id}.log")
 )
 logger = logging.getLogger(__name__)
+
 logger.setLevel(logging.INFO)
 
-ee.Initialize()
+try:
+    credentials = ee.ServiceAccountCredentials(email=None,key_file='/home/private-key.json')
+    ee.Initialize(credentials)
+except:
+    ee.Initialize(project="pyregence-ee")
+
+# Set a default workload tag.
+ee.data.setDefaultWorkloadTag('smtx-compute')
 
 # this function is currently not used because the encoded values are precomputed in cmb_table_qa
 # will keep just in case...
@@ -80,43 +91,21 @@ def encode_table(table: ee.Dictionary):
     return encoded
 
 
-def main():
-    """Main level function for generating new CBH and CBD"""
-    
-    # initalize new cli parser
-    parser = argparse.ArgumentParser(
-        description="CLI process for generating new canopy guide."
-    )
-
-    parser.add_argument(
-        "-c",
-        "--config",
-        type=str,
-        help="path to config file",
-    )
-
-    parser.add_argument(
-        "-d",
-        "--dist_img_path",
-        type=str,
-        help="asset path of input DIST img"
-
-    )
-
-    parser.add_argument(
-        "-o",
-        "--out_folder_path",
-        type=str,
-        help="asset path of output folder"
-
-    )
-    args = parser.parse_args()
-
-    dist_img_path = args.dist_img_path
-    out_folder_path = args.out_folder_path
+def cg(dist_img_path:str,poll=False):
+    """Main level function for generating new canopy guide imageCollection"""
+    tasks=[]
+    # tiny test rectangle
+    test_rect = ee.Geometry.Polygon([[-121.03140807080943,39.716216195378465],
+                                    [-120.87347960401256,39.716216195378465],
+                                    [-120.87347960401256,39.798563143043246],
+                                    [-121.03140807080943,39.798563143043246],
+                                    [-121.03140807080943,39.716216195378465]])
+    # Set a default workload tag.
+    ee.data.setDefaultWorkloadTag('aff-compute')
     
     # parse config file
-    with open(args.config) as file:
+    config_file = os.path.join(repo_dir,'config.yml')
+    with open(config_file) as file:
         config = yaml.full_load(file)
 
     geo_info = config["geo"]
@@ -138,23 +127,6 @@ def main():
     evcr_name = "EVCR"
     evhr_name = "EVHR"
     bpsrf_name = "BPSRF"
-
-    # define disturbance image used for the DIST codes
-    # this will update with new disturbance info
-    # can update with version tags of code
-    dist_img = ee.Image(
-        f"{dist_img_path}"
-    ).unmask(0)
-    
-    # define a list of zone information
-    # does a skip from 67 to 98...not sure why just the zone numbers
-    #zones = list(range(1, 67)) + [98, 99] # all CONUS zones used for FireFactor.. check which zones your AOI falls in and provide them as a list
-    # zone image to identify which pixel belong to zone
-    zone_img = ee.Image("projects/pyregence-ee/assets/conus/landfire/zones_image")
-    zones_fc = ee.FeatureCollection("projects/pyregence-ee/assets/conus/landfire/zones")
-    # instead of listing all Zone numbers in CONUS (Firefactor), we dynamically find zone numbers of zones intersecting the DIST img footprint
-    zones = zones_fc.filterBounds(dist_img.geometry()).aggregate_array('ZONE_NUM').getInfo() # spatial intersect finding Landfire zones that overlap disturbance img footprint
-    logger.info(zones)
 
     # define the image collections for the raster data needed for calculations
     bps_ic = ee.ImageCollection("projects/pyregence-ee/assets/conus/landfire/bps")
@@ -193,16 +165,25 @@ def main():
         .limit(1, "system:time_start")
         .first()
     )
-    # FM40 image from previous time, used when there is no distubance
-    # oldfm40_img = ee.Image(
-    #     fbfm40_ic.filter(ee.Filter.eq("version", 200))
-    #     .limit(1, "system:time_start")
-    #     .first()
-    # )
     
     old_cg = ee.ImageCollection("projects/pyregence-ee/assets/conus/fuels/canopy_guide_2021_12_v1").select('newCanopy').mosaic()
+
+    # define disturbance image used for the DIST codes
+    # this will update with new disturbance info
+    # can update with version tags of code
+    dist_img = ee.Image(
+        f"{dist_img_path}"
+    ).unmask(0)
+
+    # define a list of zone information
+    # does a skip from 67 to 98...not sure why just the zone numbers
+    #zones = list(range(1, 67)) + [98, 99] # all CONUS zones used for FireFactor.. check which zones your AOI falls in and provide them as a list
     # zone image to identify which pixel belong to zone
     zone_img = ee.Image("projects/pyregence-ee/assets/conus/landfire/zones_image")
+    zones_fc = ee.FeatureCollection("projects/pyregence-ee/assets/conus/landfire/zones")
+    # instead of listing all Zone numbers in CONUS (Firefactor), we dynamically find zone numbers of zones intersecting the DIST img footprint
+    zones = zones_fc.filterBounds(dist_img.geometry()).aggregate_array('ZONE_NUM').getInfo() # spatial intersect finding Landfire zones that overlap disturbance img footprint
+    logger.info(f"LF zones overlapping AOI: {zones}")
 
     # encode the images into unique codes
     # code will be a 16 digit value where each group of values
@@ -225,7 +206,8 @@ def main():
 
     # define the collection to dump data to
     # this needs to be an image collection as each zone is exported individually
-    # output_ic = f"projects/pyregence-ee/assets/conus/fuels/canopy_guide_{version}"
+    out_folder_path = dist_img_path.replace('treatment_scenarios','fuelscape_scenarios') # {project-folder}/output/*_fuelscape/
+    os.popen(f"earthengine create folder {out_folder_path}")
     output_ic = f"{out_folder_path}/canopy_guide_collection" # canopy guide is exported as zone-wise imgs into its own imageCollection, so we need to back up one path to the parent folder and make a canopy guide imgColl
     os.popen(f"earthengine create collection {output_ic}")
     
@@ -290,21 +272,27 @@ def main():
         # set up export task
         # each zone will be all of CONUS with same projection/spatial extent
         # this is to prevent any pixel misalignment at edges of zone
-        asset_id = output_ic + f"/new_canopy_zone{zone:02d}"
-        task = ee.batch.Export.image.toAsset(
-            image=zone_out,
-            description=f"Zone{zone:02d}_canopy_guide_export_{os.path.basename(dist_img_path)}",
-            assetId=asset_id,
-            region=dist_img.geometry(),
-            scale=scale,
-            crs=crs,
-            maxPixels=1e12,
-            pyramidingPolicy={".default": "mode"},
-        )
+        # set workload tag context with with 
+        with ee.data.workloadTagContext('smtx-export'):
+            asset_id = output_ic + f"/new_canopy_zone{zone:02d}"
+            task = ee.batch.Export.image.toAsset(
+                image=zone_out,
+                description=f"Zone{zone:02d}_canopy_guide_export_{os.path.basename(dist_img_path)}",
+                assetId=asset_id,
+                region=dist_img.geometry(), #test_rect, 
+                scale=scale,
+                crs=crs,
+                crsTransform=geo_t,
+                maxPixels=1e12,
+                pyramidingPolicy={".default": "mode"},
+            )
+            task.start()
         logger.info(f"Exporting {asset_id}")
-        task.start()
+        tasks.append(task)
     
-        
-# main level process if running as script
-if __name__ == "__main__":
-    main()
+    if poll:
+        for task in tasks:
+            poll_submitted_task(task,1)
+    
+    return output_ic # imageCollection holding image exports
+

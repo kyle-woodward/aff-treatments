@@ -7,20 +7,28 @@ Usage:
 import os 
 import ee
 import yaml
-import argparse
 import logging
-from utils.ee_csv_parser import parse_txt, to_numeric
+from src.utils.ee_csv_parser import parse_txt, to_numeric
+from src.utils.cloud_utils import poll_submitted_task
+import datetime
 
+repo_dir =  os.path.abspath(os.path.join(__file__ ,"../..")) 
+date_id = datetime.datetime.utcnow().strftime("%Y-%m-%d").replace('-','') # like 20221216
 logging.basicConfig(
     format="%(asctime)s %(message)s",
     datefmt="%Y-%m-%d %I:%M:%S %p",
     level=logging.WARNING,
-    filename=os.path.join(os.path.dirname(__file__), 'calc_fm40.log')
+    filename = os.path.join(repo_dir,"log",f"{date_id}.log")
 )
 logger = logging.getLogger(__name__)
+
 logger.setLevel(logging.INFO)
 
-ee.Initialize()
+try:
+    credentials = ee.ServiceAccountCredentials(email=None,key_file='/home/private-key.json')
+    ee.Initialize(credentials)
+except:
+    ee.Initialize(project="pyregence-ee")
 
 # this function is currently not used because the encoded values are precomputed in cmb_table_qa
 # will keep just in case...
@@ -80,43 +88,22 @@ def encode_table(table: ee.Dictionary):
     return encoded
 
 
-def main():
+def fm40(dist_img_path:str,fuels_source='firefactor',poll=False):
     """Main level function for generating new CBH and CBD"""
+    tasks=[]
+    # tiny test rectangle
+    test_rect = ee.Geometry.Polygon([[-121.03140807080943,39.716216195378465],
+                                    [-120.87347960401256,39.716216195378465],
+                                    [-120.87347960401256,39.798563143043246],
+                                    [-121.03140807080943,39.798563143043246],
+                                    [-121.03140807080943,39.716216195378465]])
     
-    # initalize new cli parser
-    parser = argparse.ArgumentParser(
-        description="CLI process for generating new CBH and CBD."
-    )
-
-    parser.add_argument(
-        "-c",
-        "--config",
-        type=str,
-        help="path to config file",
-    )
-
-    parser.add_argument(
-        "-d",
-        "--dist_img_path",
-        type=str,
-        help="asset path of input DIST img"
-
-    )
-
-    parser.add_argument(
-        "-o",
-        "--out_folder_path",
-        type=str,
-        help="asset path of output folder"
-
-    )
-    args = parser.parse_args()
-
-    dist_img_path = args.dist_img_path
-    out_folder_path = args.out_folder_path
+    # Set a default workload tag.
+    ee.data.setDefaultWorkloadTag('smtx-compute')
     
     # parse config file
-    with open(args.config) as file:
+    config_file = os.path.join(repo_dir,'config.yml')
+    with open(config_file) as file:
         config = yaml.full_load(file)
 
     geo_info = config["geo"]
@@ -140,26 +127,8 @@ def main():
     evhr_name = "EVHR"
     bpsrf_name = "BPSRF"
 
-    # define disturbance image used for the DIST codes
-    # this will update with new disturbance info
-    # can update with version tags of code
-    dist_img = ee.Image(
-        f"{dist_img_path}"
-    )#.unmask(0) # to ensure encoded imgs that get remapped to new FM40 lookup values only occur in the original masked DIST img pixels 
-
-    # define a list of zone information
-    # does a skip from 67 to 98...not sure why just the zone numbers
-    #zones = list(range(1, 67)) + [98, 99] # all CONUS zones used for FireFactor.. check which zones your AOI falls in and provide them as a list
-    # zone image to identify which pixel belong to zone
-    zone_img = ee.Image("projects/pyregence-ee/assets/conus/landfire/zones_image")
-    zones_fc = ee.FeatureCollection("projects/pyregence-ee/assets/conus/landfire/zones")
-    # instead of listing all Zone numbers in CONUS (Firefactor), we dynamically find zone numbers of zones intersecting the DIST img footprint
-    zones = zones_fc.filterBounds(dist_img.geometry()).aggregate_array('ZONE_NUM').getInfo() # spatial intersect finding Landfire zones that overlap disturbance img footprint
-    logger.info(zones)
-
     # define the image collections for the raster data needed for calculations
     bps_ic = ee.ImageCollection("projects/pyregence-ee/assets/conus/landfire/bps")
-    fbfm40_ic = ee.ImageCollection("projects/pyregence-ee/assets/conus/landfire/fbfm40")
     # the actual values being used in the FM40 crosswalk are the FVH, FVC, FVT
     # however, the tables have EVH, EVC, EVT...
     # so variables are named as in the tables but note they are actually the F* layers
@@ -194,19 +163,33 @@ def main():
         .limit(1, "system:time_start")
         .first()
     )
-    # FM40 image from previous time, used when there is no distubance 
-    # oldfm40_img = ee.Image(
-    #     fbfm40_ic.filter(ee.Filter.eq("version", 200))
-    #     .limit(1, "system:time_start")
-    #     .first()
-    # )
-    # FOR AFF do we use FireFactor v1 updated FM40 and update in only AFF disturbed pixels? 
-    # or do we update from LF2016 2019 capable like we start with for FireFactor and combine FF v1 DIST img w AFF DIST img?
-    # if we do second option, then we won't have WUI nonburnable conversions in there, but if we do first option, the most important DIST from the last 10 years will take precedent at each pixel
-    oldfm40_img = ee.Image("projects/pyregence-ee/assets/conus/fuels/Fuels_FM40_WUI_IrrigatedConversion_2022_10")
     
+    # Use latest FireFactor or Pyrologix version as basleine FM40 to update from
+    if fuels_source == "firefactor":
+        oldfm40_img = ee.Image("projects/pyregence-ee/assets/conus/fuels/Fuels_FM40_WUI_IrrigatedConversion_2022_10") # Firefactor as baseline, pre Custom fuels edit
+    elif fuels_source == "pyrologix":
+        oldfm40_img = ee.Image("projects/pyregence-ee/assets/subconus/california/pyrologix/fm40/fm402022") #Pyrologix as baseline
+    else:
+        raise ValueError(f"{fuels_source} not a valid fuels data source. Valid data sources: firefactor, pyrologix")
     # zone image to identify which pixel belong to zone
     zone_img = ee.Image("projects/pyregence-ee/assets/conus/landfire/zones_image")
+
+    # define disturbance image used for the DIST codes
+    # this will update with new disturbance info
+    # can update with version tags of code
+    dist_img = ee.Image(
+        f"{dist_img_path}"
+    )#.unmask(0) # to ensure encoded imgs that get remapped to new FM40 lookup values only occur in the original masked DIST img pixels
+    
+    # define a list of zone information
+    # does a skip from 67 to 98...not sure why just the zone numbers
+    #zones = list(range(1, 67)) + [98, 99] # all CONUS zones used for FireFactor.. check which zones your AOI falls in and provide them as a list
+    # zone image to identify which pixel belong to zone
+    zone_img = ee.Image("projects/pyregence-ee/assets/conus/landfire/zones_image")
+    zones_fc = ee.FeatureCollection("projects/pyregence-ee/assets/conus/landfire/zones")
+    # instead of listing all Zone numbers in CONUS (Firefactor), we dynamically find zone numbers of zones intersecting the DIST img footprint
+    zones = zones_fc.filterBounds(dist_img.geometry()).aggregate_array('ZONE_NUM').getInfo() # spatial intersect finding Landfire zones that overlap disturbance img footprint
+    logger.info(f"LF zones overlapping AOI: {zones}")
     
     # encode the images into unique codes
     # code will be a 16 digit value where each group of values
@@ -229,6 +212,8 @@ def main():
 
     # define the collection to dump data to
     # this needs to be an image collection as each zone is exported individually
+    out_folder_path = dist_img_path.replace('treatment_scenarios','fuelscape_scenarios') # {project-folder}/output/*_fuelscape/
+    os.popen(f"earthengine create folder {out_folder_path}")
     output_ic = f"{out_folder_path}/fm40_collection" # canopy guide is exported as zone-wise imgs into its own imageCollection, so we need to back up one path to the parent folder and make a canopy guide imgColl
     os.popen(f"earthengine create collection {output_ic}").read()
     
@@ -288,22 +273,26 @@ def main():
         # set up export task
         # each zone will be all of CONUS with same projection/spatial extent
         # this is to prevent any pixel misalignment at edges of zone
-        asset_id = output_ic + f"/FM40_zone{zone:02d}"
-        task = ee.batch.Export.image.toAsset(
-            image=zone_out.clip(dist_img.geometry()), #clip to just the AFF study area bbox
-            description=f"Zone{zone:02d}_FM40_export_{os.path.basename(dist_img_path)}",
-            assetId=asset_id,
-            region=zone_img.geometry(),
-            #crsTransform=geo_t, 
-            scale=scale,
-            crs=crs, 
-            maxPixels=1e12,
-            pyramidingPolicy={".default": "mode"},
-        )
+        with ee.data.workloadTagContext('smtx-export'):
+            asset_id = output_ic + f"/FM40_zone{zone:02d}"
+            task = ee.batch.Export.image.toAsset(
+                image=zone_out,
+                description=f"Zone{zone:02d}_FM40_export_{os.path.basename(dist_img_path)}",
+                assetId=asset_id,
+                region=dist_img.geometry(), #test_rect
+                crsTransform=geo_t, 
+                scale=scale,
+                crs=crs, 
+                maxPixels=1e12,
+                pyramidingPolicy={".default": "mode"},
+            )
+            task.start()  # kick of export task
         logger.info(f"Exporting {asset_id}")
-        task.start()  # kick of export task
+        tasks.append(task)
     
-
-# main level process if running as script
-if __name__ == "__main__":
-    main()
+    # logger.info(len(tasks))
+    if poll:
+        for task in tasks:
+            poll_submitted_task(task,1)
+        
+    return output_ic

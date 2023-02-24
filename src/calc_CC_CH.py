@@ -1,3 +1,4 @@
+#%%
 """
 Script used to calculate CC and CH for disturbed areas using
 DIST, EVT, and FVC/FVH midpoint images
@@ -8,20 +9,28 @@ import os
 import ee
 import math
 import yaml
-import argparse
 import logging
-from utils.ee_csv_parser import parse_txt, to_numeric
+from src.utils.ee_csv_parser import parse_txt, to_numeric
+from src.utils.cloud_utils import poll_submitted_task
+import datetime
 
+repo_dir =  os.path.abspath(os.path.join(__file__ ,"../.."))
+date_id = datetime.datetime.utcnow().strftime("%Y-%m-%d").replace('-','') # like 20221216
 logging.basicConfig(
     format="%(asctime)s %(message)s",
     datefmt="%Y-%m-%d %I:%M:%S %p",
     level=logging.WARNING,
-    filename=os.path.join(os.path.dirname(__file__),'calc_CC_CH.log')
+    filename = os.path.join(repo_dir,"log",f"{date_id}.log")
 )
 logger = logging.getLogger(__name__)
+
 logger.setLevel(logging.INFO)
 
-ee.Initialize()
+try:
+    credentials = ee.ServiceAccountCredentials(email=None,key_file='/home/private-key.json')
+    ee.Initialize(credentials)
+except:
+    ee.Initialize(project="pyregence-ee")
 
 def encode_table(table):
     """Function to take dictionary representation of CSV and
@@ -70,43 +79,20 @@ def encode_table(table):
 
     return encoded
 
-def main():
-    """Main level function for generating new CBH and CBD"""
+def cc_ch(dist_img_path,fuels_source,poll=False):
+    """Main level function for generating new CC and CH"""
+    # tiny test rectangle
+    test_rect = ee.Geometry.Polygon([[-121.03140807080943,39.716216195378465],
+                                    [-120.87347960401256,39.716216195378465],
+                                    [-120.87347960401256,39.798563143043246],
+                                    [-121.03140807080943,39.798563143043246],
+                                    [-121.03140807080943,39.716216195378465]])
+    # Set a default workload tag.
+    ee.data.setDefaultWorkloadTag('smtx-compute')
     
-    # initalize new cli parser
-    parser = argparse.ArgumentParser(
-        description="CLI process for generating new CBH and CBD."
-    )
-
-    parser.add_argument(
-        "-c",
-        "--config",
-        type=str,
-        help="path to config file",
-    )
-
-    parser.add_argument(
-        "-d",
-        "--dist_img_path",
-        type=str,
-        help="asset path of input DIST img"
-
-    )
-    
-    parser.add_argument(
-        "-o",
-        "--out_folder_path",
-        type=str,
-        help="asset path of output folder"
-
-    )
-    args = parser.parse_args()
-
-    dist_img_path = args.dist_img_path
-    out_folder_path = args.out_folder_path
-
     # parse config file
-    with open(args.config) as file:
+    config_file = os.path.join(repo_dir,'config.yml')
+    with open(config_file) as file:
         config = yaml.full_load(file)
 
     geo_info = config["geo"]
@@ -125,9 +111,6 @@ def main():
     base_uri2 = "gs://landfire/LFTFCT_tables/{0}_Disturbance_Tbl_filled.csv"
 
     # define the image collections for the raster data needed for calculations
-    cc_ic = ee.ImageCollection("projects/pyregence-ee/assets/conus/landfire/cc")
-    cbh_ic = ee.ImageCollection("projects/pyregence-ee/assets/conus/landfire/cbh")
-    ch_ic = ee.ImageCollection("projects/pyregence-ee/assets/conus/landfire/ch")
     evt_ic = ee.ImageCollection("projects/pyregence-ee/assets/conus/landfire/fvt")
     fvc_mid_ic = ee.ImageCollection("projects/pyregence-ee/assets/conus/fuels/Midpoint_CC")
     fvh_mid_ic = ee.ImageCollection("projects/pyregence-ee/assets/conus/fuels/Midpoint_CH")
@@ -135,23 +118,16 @@ def main():
     # start by extracting out the specific image we need for the regression calculations
     # we need the version 200 / year 2016 data
     # sometimes the date metadata is not actually 2016 so we filter by version as select first image in time
-    # Canopy cover image
-    # cc_img = ee.Image(
-    #     cc_ic.filter(ee.Filter.eq("version", 200)).limit(1, "system:time_start").first()
-    # )
-    # AFF - we use FFv1 layers as baseline, updating only in DIST img areas
-    cc_img = ee.Image("projects/pyregence-ee/assets/conus/fuels/Fuels_CC_2021_12") # using FFv1 as baseline
-    # Canopy height image
-    # ch_img = ee.Image(
-    #     ch_ic.filter(ee.Filter.eq("version", 200)).limit(1, "system:time_start").first()
-    # )
-    ch_img = ee.Image("projects/pyregence-ee/assets/conus/fuels/Fuels_CH_2021_12") # using FFv1 as baseline
-    # Canopy base height image
-    cbh_img = ee.Image(
-        cbh_ic.filter(ee.Filter.eq("version", 200))
-        .limit(1, "system:time_start")
-        .first()
-    )
+    
+    if fuels_source == "firefactor":
+        cc_img = ee.Image("projects/pyregence-ee/assets/conus/fuels/Fuels_CC_2021_12") # using FFv1 as baseline
+        ch_img = ee.Image("projects/pyregence-ee/assets/conus/fuels/Fuels_CH_2021_12") # using FFv1 as baseline
+    elif fuels_source == "pyrologix":
+        cc_img = ee.Image("projects/pyregence-ee/assets/subconus/california/pyrologix/cc/cc2022") #Pyrologix as baseline
+        ch_img = ee.Image("projects/pyregence-ee/assets/subconus/california/pyrologix/ch/ch2022") #Pyrologix as baseline
+    else:
+        raise ValueError(f"{fuels_source} not a valid fuels data source. Valid data sources: firefactor, pyrologix")
+    
     # EVT image
     evt_img = ee.Image(
         evt_ic.filter(ee.Filter.eq("version", 200))
@@ -184,8 +160,10 @@ def main():
     dist_mask = dist_img.mask() # this creates 1's everywhere include outside disturbed areas. not using
 
     #canopy guide collection for post-processing ruleset
-    # AFF - create cg collection path from the dist_img_path
-    cg_path = dist_img_path.replace('treatment_scenarios','fuelscapes_scenarios') + '/canopy_guide_collection'
+    # create cg collection path from the dist_img_path
+    out_folder_path = dist_img_path.replace('treatment_scenarios','fuelscape_scenarios') # {project-folder}/output/*_fuelscape/
+    os.popen(f"earthengine create folder {out_folder_path}")
+    cg_path = f"{out_folder_path}/canopy_guide_collection"
     canopy_guide = ee.ImageCollection(f"{cg_path}").select('newCanopy').mosaic()
     
     # encode the images into unique codes
@@ -217,6 +195,8 @@ def main():
     output_folder = out_folder_path
 
     # loop through the variables to run the regressions
+    tasks=[]
+    assets=[]
     for i, var in enumerate(vars):                    
         # if i==2 or var == CBH use the base_uri2
         # this was to accommodate CBH, which was removed from vars list so the else condition will be true for both now
@@ -282,7 +262,7 @@ def main():
                 .remap(values,bins,0)
                 .where(canopy_guide.eq(0), 0) # zero out where CG is 0
                 .where(cc_img.eq(0), 0) # zero out where CC 2019 is 0
-                .unmask(fills[i])
+                .unmask(fills[i]) # fill un-disturbed pixels with pre- fuel value
                 .updateMask(zone_img)
                 .rename(var.lower())
                 )
@@ -314,29 +294,40 @@ def main():
                 .clamp(0,510)
                 .where(canopy_guide.eq(0), 0) # zero out where CG is 0
                 .where(cc_img.eq(0), 0) # zero out where CC is 0
-                .unmask(fills[i])
+                .unmask(fills[i]) # fill un-disturbed pixels with pre- fuel value
                 .updateMask(zone_img)
                 .rename(var.lower()) 
                 )
         
         # define where to export image
         output_asset = f"{output_folder}/{output_names[i]}"
-
+        
         # set up export task
-        # export has specific CONUS projection/spatial extent
-        task = ee.batch.Export.image.toAsset(
-            image=regress_processed,
-            description=f"export_{output_names[i]}_{os.path.basename(dist_img_path)}",
-            assetId=output_asset,
-            region=cc_img.geometry(),
-            crsTransform=geo_t,
-            crs=crs,
-            maxPixels=1e12,
-        )
-        task.start()  # kick off export task
-        logger.info(f"Exporting {output_asset}")
-        # logger.info(f"CG path: {cg_path}")
-        # logger.info(f"would export {output_asset}")
-# main level process if running as script
-if __name__ == "__main__":
-    main()
+        # set workload tag context with with 
+        with ee.data.workloadTagContext('smtx-export'):        
+            task = ee.batch.Export.image.toAsset(
+                image=regress_processed,
+                description=f"export_{output_names[i]}_{os.path.basename(dist_img_path)}",
+                assetId=output_asset,
+                region=cc_img.geometry(), # test_rect,
+                crsTransform=geo_t,
+                crs=crs,
+                maxPixels=1e12,
+            )
+            task.start()  # kick off export task
+            logger.info(f"Exporting {output_asset}")
+        
+        assets.append(output_asset)
+        tasks.append(task)
+    
+    if poll:
+        for task in tasks:
+            poll_submitted_task(task,1)
+        
+    return assets
+
+#%%
+# DIST_raster = "projects/pyregence-ee/assets/op-tx/test2/outputs/Treatments_Plumas_Protect_Alt1_DIST"
+# cc,ch = cc_ch(DIST_raster,fuels_source='pyrologix')
+# print(cc,ch)
+# %%
